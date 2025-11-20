@@ -8,7 +8,7 @@ import yt_dlp
 app = Flask(__name__)
 
 # -------------------------------------------------------------------------
-# GLOBAL STATE
+# CONFIGURATION
 # -------------------------------------------------------------------------
 playlist = [
     "https://soundcloud.com/tung-do-688896603/sets/piece-of-mind"
@@ -17,6 +17,10 @@ current_song_index = 0
 current_title = "Waiting for stream..."
 current_ffmpeg_process = None
 current_yt_process = None 
+
+# ESP32 OPTIMIZATION SETTINGS
+AUDIO_BITRATE = '128k' # 128k is standard. Try '96k' if WiFi is weak.
+CHUNK_SIZE = 2048      # Smaller chunks (2KB) are safer for ESP32 buffers
 # -------------------------------------------------------------------------
 
 def expand_playlist(url):
@@ -59,7 +63,7 @@ def audio_generator():
                 current_song_index += 1
                 continue
 
-        # 2. Get Title (Metadata Only)
+        # 2. Get Title
         try:
             with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
                 info = ydl.extract_info(track_link, download=False)
@@ -69,21 +73,35 @@ def audio_generator():
             
         print(f"--> Playing: {current_title}")
 
-        # 3. PIPING STRATEGY (Fixes 'Invalid Argument' errors)
+        # 3. PIPING STRATEGY (Optimized for ESP32)
         yt_cmd = [
             sys.executable, '-m', 'yt_dlp', 
             '--quiet', '--no-playlist', 
-            '-o', '-', # Output raw audio to stdout
+            '-o', '-', 
             track_link
         ]
         
         ffmpeg_cmd = [
             'ffmpeg',
-            '-i', 'pipe:0',          # Read from stdin (yt-dlp)
-            '-f', 'mp3',             # Output format
+            '-i', 'pipe:0',          
+            '-f', 'mp3',             
+            
+            # --- ESP32 OPTIMIZATIONS ---
             '-acodec', 'libmp3lame',
-            '-ab', '128k', '-ar', '44100', '-ac', '2', 
-            '-'                      # Write to stdout (Flask)
+            '-ar', '44100',          # Standard Sample Rate
+            '-ac', '2',              # Stereo
+            
+            # Force Constant Bit Rate (CBR)
+            # ESP32 hates Variable Bit Rate (VBR). This forces strict 128k.
+            '-ab', AUDIO_BITRATE,
+            '-minrate', AUDIO_BITRATE,
+            '-maxrate', AUDIO_BITRATE,
+            '-bufsize', str(int(AUDIO_BITRATE.replace('k','')) * 2) + 'k',
+            
+            # Volume Normalization (Prevents clipping/static)
+            '-af', 'volume=0.8',
+            
+            '-'                      
         ]
         
         try:
@@ -96,9 +114,9 @@ def audio_generator():
                 stderr=None 
             )
             
-            chunk_size = 4096
+            # Stream data in optimized chunks
             while True:
-                data = current_ffmpeg_process.stdout.read(chunk_size)
+                data = current_ffmpeg_process.stdout.read(CHUNK_SIZE)
                 if not data: break
                 yield data
                 
@@ -114,7 +132,8 @@ def audio_generator():
 
 @app.route('/stream')
 def stream():
-    return Response(audio_generator(), mimetype='audio/mpeg')
+    # Explicitly set chunked transfer encoding headers
+    return Response(audio_generator(), mimetype='audio/mpeg', headers={"Transfer-Encoding": "chunked"})
 
 @app.route('/metadata')
 def metadata():
