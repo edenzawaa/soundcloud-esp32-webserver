@@ -10,7 +10,8 @@ app = Flask(__name__)
 # CONFIGURATION
 # -------------------------------------------------------------------------
 playlist = [
-    "https://soundcloud.com/tung-do-688896603/sets/piece-of-mind"
+    "https://soundcloud.com/tung-do-688896603/sets/piece-of-mind",
+    "https://soundcloud.com/tung-do-688896603/sets/cool-stuffs"
 ]
 
 current_song_index = 0
